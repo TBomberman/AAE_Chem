@@ -2,26 +2,47 @@ import tensorflow as tf
 import numpy as np
 import datetime
 import os
+from keras.preprocessing.image import ImageDataGenerator
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
-from tensorflow.examples.tutorials.mnist import input_data
 
+# from tensorflow.examples.tutorials.mnist import input_data
+tf.reset_default_graph()
 # Progressbar
 # bar = progressbar.ProgressBar(widgets=['[', progressbar.Timer(), ']', progressbar.Bar(), '(', progressbar.ETA(), ')'])
 
 # Get the MNIST data
-mnist = input_data.read_data_sets('./Data', one_hot=True)
+# mnist = input_data.read_data_sets('./Data', one_hot=True)
 
 # Parameters
-input_dim = 784
+image_data_count = 7696
+image_width_height = 150
+input_dim = image_width_height*image_width_height
 n_l1 = 1000
 n_l2 = 1000
-z_dim = 2
-batch_size = 100
-n_epochs = 1000
+z_dim = 3
+batch_size = 16
+n_epochs = 100
 learning_rate = 0.001
 beta1 = 0.9
 results_path = './Results/Adversarial_Autoencoder'
+train_data_dir = '/home/gwoo/Documents/Data/png'
+
+
+def im2double(im):
+    max_val = 255
+    out = (max_val - im.astype('float')) / max_val
+    return out
+
+train_datagen = ImageDataGenerator(
+    preprocessing_function=im2double,
+    horizontal_flip=False)
+train_generator = train_datagen.flow_from_directory(
+    train_data_dir,
+    target_size=(image_width_height, image_width_height),
+    batch_size=batch_size,
+    color_mode='grayscale',
+    class_mode=None)
 
 # Placeholders for input data and the targets
 x_input = tf.placeholder(dtype=tf.float32, shape=[batch_size, input_dim], name='Input')
@@ -41,9 +62,9 @@ def form_results():
     saved_model_path = results_path + folder_name + '/Saved_models/'
     log_path = results_path + folder_name + '/log'
     if not os.path.exists(results_path + folder_name):
-        os.mkdir(results_path + folder_name)
-        os.mkdir(tensorboard_path)
-        os.mkdir(saved_model_path)
+        os.makedirs(results_path + folder_name)
+        os.makedirs(tensorboard_path)
+        os.makedirs(saved_model_path)
         os.mkdir(log_path)
     return tensorboard_path, saved_model_path, log_path
 
@@ -57,23 +78,29 @@ def generate_image_grid(sess, op):
     """
     x_points = np.arange(-10, 10, 1.5).astype(np.float32)
     y_points = np.arange(-10, 10, 1.5).astype(np.float32)
+    k_points = np.arange(-10, 10, 1.5).astype(np.float32)
 
-    nx, ny = len(x_points), len(y_points)
-    plt.subplot()
-    gs = gridspec.GridSpec(nx, ny, hspace=0.05, wspace=0.05)
+    nx, ny, = len(x_points), len(y_points)
 
-    for i, g in enumerate(gs):
-        z = np.concatenate(([x_points[int(i / ny)]], [y_points[int(i % nx)]]))
-        z = np.reshape(z, (1, 2))
-        x = sess.run(op, feed_dict={decoder_input: z})
-        ax = plt.subplot(g)
-        img = np.array(x.tolist()).reshape(28, 28)
-        ax.imshow(img, cmap='gray')
-        ax.set_xticks([])
-        ax.set_yticks([])
-        ax.set_aspect('auto')
-    plt.show()
+    for k in k_points:
+        plt.subplot()
+        gs = gridspec.GridSpec(nx, ny, hspace=0.05, wspace=0.05)
 
+        for i, g in enumerate(gs):
+            z = np.concatenate(([x_points[int(i / ny)]], [y_points[int(i % nx)]], [k]))
+            z = np.reshape(z, (1, 3))
+            x = sess.run(op, feed_dict={decoder_input: z})
+            ax = plt.subplot(g)
+            img = np.array(x.tolist()).reshape(image_width_height, image_width_height)
+            ax.imshow(img, cmap='gray')
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.set_aspect('auto')
+        plt.show()
+
+#def convolution(x, n1, n2, name):
+#    out = 'xxxx'
+#    return out
 
 def dense(x, n1, n2, name):
     """
@@ -105,7 +132,10 @@ def encoder(x, reuse=False):
     with tf.name_scope('Encoder'):
         e_dense_1 = tf.nn.relu(dense(x, input_dim, n_l1, 'e_dense_1'))
         e_dense_2 = tf.nn.relu(dense(e_dense_1, n_l1, n_l2, 'e_dense_2'))
-        latent_variable = dense(e_dense_2, n_l2, z_dim, 'e_latent_variable')
+        e_dense_3 = tf.nn.relu(dense(e_dense_2, n_l1, n_l2, 'e_dense_3'))
+        e_dense_4 = tf.nn.relu(dense(e_dense_3, n_l1, n_l2, 'e_dense_4'))
+        e_dense_5 = tf.nn.relu(dense(e_dense_4, n_l1, n_l2, 'e_dense_5'))
+        latent_variable = dense(e_dense_5, n_l2, z_dim, 'e_latent_variable')
         return latent_variable
 
 
@@ -121,7 +151,10 @@ def decoder(x, reuse=False):
     with tf.name_scope('Decoder'):
         d_dense_1 = tf.nn.relu(dense(x, z_dim, n_l2, 'd_dense_1'))
         d_dense_2 = tf.nn.relu(dense(d_dense_1, n_l2, n_l1, 'd_dense_2'))
-        output = tf.nn.sigmoid(dense(d_dense_2, n_l1, input_dim, 'd_output'))
+        d_dense_3 = tf.nn.relu(dense(d_dense_2, n_l2, n_l1, 'd_dense_3'))
+        d_dense_4 = tf.nn.relu(dense(d_dense_3, n_l2, n_l1, 'd_dense_4'))
+        d_dense_5 = tf.nn.relu(dense(d_dense_4, n_l2, n_l1, 'd_dense_5'))
+        output = tf.nn.sigmoid(dense(d_dense_5, n_l1, input_dim, 'd_output'))
         return output
 
 
@@ -138,7 +171,10 @@ def discriminator(x, reuse=False):
     with tf.name_scope('Discriminator'):
         dc_den1 = tf.nn.relu(dense(x, z_dim, n_l1, name='dc_den1'))
         dc_den2 = tf.nn.relu(dense(dc_den1, n_l1, n_l2, name='dc_den2'))
-        output = dense(dc_den2, n_l2, 1, name='dc_output')
+        dc_den3 = tf.nn.relu(dense(dc_den2, n_l1, n_l2, name='dc_den3'))
+        dc_den4 = tf.nn.relu(dense(dc_den3, n_l1, n_l2, name='dc_den4'))
+        dc_den5 = tf.nn.relu(dense(dc_den4, n_l1, n_l2, name='dc_den5'))
+        output = dense(dc_den5, n_l2, 1, name='dc_output')
         return output
 
 
@@ -163,13 +199,13 @@ def train(train_model=True):
     autoencoder_loss = tf.reduce_mean(tf.square(x_target - decoder_output))
 
     # Discrimminator Loss
-    dc_loss_real = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(targets=tf.ones_like(d_real), logits=d_real))
-    dc_loss_fake = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(targets=tf.zeros_like(d_fake), logits=d_fake))
+    dc_loss_real = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.ones_like(d_real), logits=d_real))
+    dc_loss_fake = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.zeros_like(d_fake), logits=d_fake))
     dc_loss = dc_loss_fake + dc_loss_real
 
     # Generator loss
     generator_loss = tf.reduce_mean(
-        tf.nn.sigmoid_cross_entropy_with_logits(targets=tf.ones_like(d_fake), logits=d_fake))
+        tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.ones_like(d_fake), logits=d_fake))
 
     all_variables = tf.trainable_variables()
     dc_var = [var for var in all_variables if 'dc_' in var.name]
@@ -186,8 +222,8 @@ def train(train_model=True):
     init = tf.global_variables_initializer()
 
     # Reshape immages to display them
-    input_images = tf.reshape(x_input, [-1, 28, 28, 1])
-    generated_images = tf.reshape(decoder_output, [-1, 28, 28, 1])
+    input_images = tf.reshape(x_input, [-1, image_width_height, image_width_height, 1])
+    generated_images = tf.reshape(decoder_output, [-1, image_width_height, image_width_height, 1])
 
     # Tensorboard visualization
     tf.summary.scalar(name='Autoencoder Loss', tensor=autoencoder_loss)
@@ -195,8 +231,8 @@ def train(train_model=True):
     tf.summary.scalar(name='Generator Loss', tensor=generator_loss)
     tf.summary.histogram(name='Encoder Distribution', values=encoder_output)
     tf.summary.histogram(name='Real Distribution', values=real_distribution)
-    tf.summary.image(name='Input Images', tensor=input_images, max_outputs=10)
-    tf.summary.image(name='Generated Images', tensor=generated_images, max_outputs=10)
+    tf.summary.image(name='Input Images', tensor=input_images, max_outputs=1)
+    tf.summary.image(name='Generated Images', tensor=generated_images, max_outputs=1)
     summary_op = tf.summary.merge_all()
 
     # Saving the model
@@ -208,11 +244,14 @@ def train(train_model=True):
             sess.run(init)
             writer = tf.summary.FileWriter(logdir=tensorboard_path, graph=sess.graph)
             for i in range(n_epochs):
-                n_batches = int(mnist.train.num_examples / batch_size)
+                # n_batches = int(mnist.train.num_examples / batch_size)
+                n_batches = int(image_data_count / batch_size)
                 print("------------------Epoch {}/{}------------------".format(i, n_epochs))
                 for b in range(1, n_batches + 1):
                     z_real_dist = np.random.randn(batch_size, z_dim) * 5.
-                    batch_x, _ = mnist.train.next_batch(batch_size)
+                    # batch_x, _ = mnist.train.next_batch(batch_size)
+                    # batch_x = np.squeeze(train_generator.next(), axis=(2,3))
+                    batch_x = np.array([data.reshape(input_dim) for data in train_generator.next()])
                     sess.run(autoencoder_optimizer, feed_dict={x_input: batch_x, x_target: batch_x})
                     sess.run(discriminator_optimizer,
                              feed_dict={x_input: batch_x, x_target: batch_x, real_distribution: z_real_dist})
@@ -239,7 +278,9 @@ def train(train_model=True):
             # Get the latest results folder
             all_results = os.listdir(results_path)
             all_results.sort()
-            saver.restore(sess, save_path=tf.train.latest_checkpoint(results_path + '/' + all_results[-1] + '/Saved_models/'))
+            load_path = tf.train.latest_checkpoint(results_path + '/' + all_results[-1] + '/Saved_models/')
+            print("Load path: {}".format(load_path))
+            saver.restore(sess, save_path=load_path)
             generate_image_grid(sess, op=decoder_image)
 
 if __name__ == '__main__':
