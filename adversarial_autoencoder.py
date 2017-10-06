@@ -16,7 +16,7 @@ tf.reset_default_graph()
 
 # Parameters
 image_data_count = 7696
-image_width_height = 150
+image_width_height = 300
 input_dim = image_width_height*image_width_height
 n_l1 = 1000
 n_l2 = 1000
@@ -27,6 +27,7 @@ learning_rate = 0.001
 beta1 = 0.9
 results_path = './Results/Adversarial_Autoencoder'
 train_data_dir = '/home/gwoo/Documents/Data/png'
+conv_depth_mult = 4
 
 
 def im2double(im):
@@ -98,9 +99,55 @@ def generate_image_grid(sess, op):
             ax.set_aspect('auto')
         plt.show()
 
-#def convolution(x, n1, n2, name):
-#    out = 'xxxx'
-#    return out
+
+def get_filter(depth_1, depth_2):
+    return tf.Variable(tf.truncated_normal([5, 5, depth_1, depth_2], stddev=0.01))
+
+
+def convolution(x, name):
+    """
+    Used to create a dense layer.
+    :param x: input tensor to the convolution layer
+    :param name: name of the entire convolution layer.i.e, variable scope name.
+    :return: tensor with shape [batch, w, h, 4]
+    """
+    with tf.variable_scope(name, reuse=None):
+        in_depth = int(x.get_shape()[3])
+        out_depth = int(in_depth * conv_depth_mult)
+        conv = tf.nn.conv2d(
+            input=x,
+            filter=get_filter(in_depth, out_depth),
+            strides=[1, 2, 2, 1],
+            padding="SAME"
+        )
+        bias = tf.get_variable("bias", shape=[1], initializer=tf.constant_initializer(0.0))
+        out = tf.add(conv, bias, name='matmul')
+        return out
+
+
+def deconvolution(x, name):
+    """
+    Used to create a dense layer.
+    :param x: input tensor to the deconvolution layer
+    :param name: name of the entire convolution layer.i.e, variable scope name.
+    :return: tensor with shape [batch, w, h, 1]
+    """
+    with tf.variable_scope(name, reuse=None):
+        in_depth = int(x.get_shape()[3])
+        out_depth = int(in_depth / conv_depth_mult)
+        in_width_height = int(x.get_shape()[1])
+        out_width_height = in_width_height * 2
+        deconv = tf.nn.conv2d_transpose(
+            value=x,
+            filter=get_filter(out_depth, in_depth),
+            output_shape=[batch_size, out_width_height, out_width_height, out_depth],
+            strides=[1, 2, 2, 1],
+            padding="SAME"
+        )
+        bias = tf.get_variable("bias", shape=[1], initializer=tf.constant_initializer(0.0))
+        out = tf.add(deconv, bias, name='matmul')
+        return out
+
 
 def dense(x, n1, n2, name):
     """
@@ -130,12 +177,12 @@ def encoder(x, reuse=False):
     if reuse:
         tf.get_variable_scope().reuse_variables()
     with tf.name_scope('Encoder'):
-        e_dense_1 = tf.nn.relu(dense(x, input_dim, n_l1, 'e_dense_1'))
-        e_dense_2 = tf.nn.relu(dense(e_dense_1, n_l1, n_l2, 'e_dense_2'))
-        e_dense_3 = tf.nn.relu(dense(e_dense_2, n_l1, n_l2, 'e_dense_3'))
-        e_dense_4 = tf.nn.relu(dense(e_dense_3, n_l1, n_l2, 'e_dense_4'))
-        e_dense_5 = tf.nn.relu(dense(e_dense_4, n_l1, n_l2, 'e_dense_5'))
-        latent_variable = dense(e_dense_5, n_l2, z_dim, 'e_latent_variable')
+        x_image_input = tf.reshape(x, [batch_size, image_width_height, image_width_height, 1])
+        e_conv_1 = tf.nn.relu(convolution(x_image_input, 'e_conv_1'))
+        e_conv_2 = tf.nn.relu(convolution(e_conv_1, 'e_conv_2'))
+        e_conv_2_flat = tf.reshape(e_conv_2, [batch_size, -1])
+        e_dense_1 = tf.nn.relu(dense(e_conv_2_flat, input_dim, n_l2, 'e_dense_1'))
+        latent_variable = dense(e_dense_1, n_l2, z_dim, 'e_latent_variable')
         return latent_variable
 
 
@@ -149,13 +196,14 @@ def decoder(x, reuse=False):
     if reuse:
         tf.get_variable_scope().reuse_variables()
     with tf.name_scope('Decoder'):
+        decoder_batch_size = int(x.get_shape()[0])
         d_dense_1 = tf.nn.relu(dense(x, z_dim, n_l2, 'd_dense_1'))
-        d_dense_2 = tf.nn.relu(dense(d_dense_1, n_l2, n_l1, 'd_dense_2'))
-        d_dense_3 = tf.nn.relu(dense(d_dense_2, n_l2, n_l1, 'd_dense_3'))
-        d_dense_4 = tf.nn.relu(dense(d_dense_3, n_l2, n_l1, 'd_dense_4'))
-        d_dense_5 = tf.nn.relu(dense(d_dense_4, n_l2, n_l1, 'd_dense_5'))
-        output = tf.nn.sigmoid(dense(d_dense_5, n_l1, input_dim, 'd_output'))
-        return output
+        d_dense_2 = tf.nn.relu(dense(d_dense_1, n_l2, input_dim, 'd_dense_2'))
+        d_dense_2_image = tf.reshape(d_dense_2, [decoder_batch_size, int(image_width_height/4), int(image_width_height/4), 16])
+        d_conv_1 = tf.nn.relu(deconvolution(d_dense_2_image, 'd_conv_1'))
+        d_conv_2 = tf.nn.sigmoid(deconvolution(d_conv_1, 'd_conv_2'))
+        output_flat = tf.reshape(d_conv_2, [decoder_batch_size, -1])
+        return output_flat
 
 
 def discriminator(x, reuse=False):
@@ -172,9 +220,7 @@ def discriminator(x, reuse=False):
         dc_den1 = tf.nn.relu(dense(x, z_dim, n_l1, name='dc_den1'))
         dc_den2 = tf.nn.relu(dense(dc_den1, n_l1, n_l2, name='dc_den2'))
         dc_den3 = tf.nn.relu(dense(dc_den2, n_l1, n_l2, name='dc_den3'))
-        dc_den4 = tf.nn.relu(dense(dc_den3, n_l1, n_l2, name='dc_den4'))
-        dc_den5 = tf.nn.relu(dense(dc_den4, n_l1, n_l2, name='dc_den5'))
-        output = dense(dc_den5, n_l2, 1, name='dc_output')
+        output = dense(dc_den3, n_l2, 1, name='dc_output')
         return output
 
 
